@@ -98,6 +98,12 @@
   <div class="card toolbar">
     <div class="group" id="durs" aria-label="음표 길이"></div>
     <button class="chip" id="restBtn" title="쉼표 입력 (S)">쉼표</button>
+    <div class="group" id="marks" aria-label="꾸밈">
+      <button id="dotBtn" title="점음표 (.)">점 ·</button>
+      <button data-link="tie" title="이음줄: 다음 음과 이어서 길게 (T)">이음줄</button>
+      <button data-link="slide" title="슬라이드: 다음 음으로 미끄러지기 (/)">슬라이드</button>
+      <button data-link="hp" title="해머온·풀오프 (H)">H/P</button>
+    </div>
     <div class="spacer"></div>
     <label class="tempo">♩ = <b id="bpmVal">100</b><input type="range" id="bpm" min="40" max="200" value="100"></label>
     <button class="btn" id="delBtn" title="선택하거나 마지막 음 지우기 (Backspace)">지우기</button>
@@ -123,7 +129,8 @@
     </div>
     <div class="neck-scroll"><svg id="fret" viewBox="0 0 1000 190" xmlns="http://www.w3.org/2000/svg"></svg></div>
     <div class="keys">
-      <kbd>Q</kbd> 온음표 <kbd>W</kbd> 2분 <kbd>E</kbd> 4분 <kbd>R</kbd> 8분 · <kbd>S</kbd> 쉼표 ·
+      <kbd>Q</kbd> 온음표 <kbd>W</kbd> 2분 <kbd>E</kbd> 4분 <kbd>R</kbd> 8분 · <kbd>.</kbd> 점음표 · <kbd>S</kbd> 쉼표 ·
+      <kbd>T</kbd> 이음줄 <kbd>/</kbd> 슬라이드 <kbd>H</kbd> 해머온·풀오프 (선택한 음 → 다음 음, 선택이 없으면 마지막 음) ·
       <kbd>0</kbd>–<kbd>9</kbd> 프렛 (<kbd>1</kbd><kbd>0</kbd>~<kbd>1</kbd><kbd>2</kbd>는 이어서) ·
       <kbd>↑</kbd><kbd>↓</kbd> 프렛 ± · <kbd>Shift</kbd>+<kbd>↑</kbd><kbd>↓</kbd> 줄 이동 ·
       <kbd>←</kbd><kbd>→</kbd> 음표 이동 · <kbd>Backspace</kbd> 지우기 · <kbd>Space</kbd> 재생/정지 · <kbd>Esc</kbd> 선택 해제
@@ -138,6 +145,9 @@
   const DURS = [4, 2, 1, 0.5];
   const DUR_NAME = { 4: '온음표', 2: '2분음표', 1: '4분음표', 0.5: '8분음표' };
   const DUR_KEY = { q: 4, w: 2, e: 1, r: 0.5 };
+  const durName = (b, dot) => (dot ? '점' : '') + DUR_NAME[b];
+  const lenOf = n => n.beats * (n.dot ? 1.5 : 1);
+  const LINK_NAME = { tie: '이음줄', slide: '슬라이드', hp: '해머온·풀오프' };
 
   // 4현 베이스 개방현 MIDI: E1 A1 D2 G2 (s: 0=E … 3=G)
   const OPEN = [28, 33, 38, 43];
@@ -150,8 +160,8 @@
   const WIDTH = { 4: 80, 2: 58, 1: 42, 0.5: 34 };
 
   const state = {
-    notes: [],          // {s, f, beats, rest}
-    dur: 1, rest: false, tempo: 100,
+    notes: [],          // {s, f, beats, dot, rest, link: null|'tie'|'slide'|'hp' (다음 음과의 연결)}
+    dur: 1, dot: false, rest: false, tempo: 100,
     selected: -1, editing: -1, playhead: -1,
     lastFret: 0,
     hover: null,        // {s}
@@ -189,15 +199,15 @@
     return ctx;
   };
 
-  function pluck(midi, t, len, dest) {
-    const f = freq(midi);
-    const saw = ctx.createOscillator(); saw.type = 'sawtooth'; saw.frequency.value = f;
-    const sine = ctx.createOscillator(); sine.type = 'sine'; sine.frequency.value = f;
-    const oct = ctx.createOscillator(); oct.type = 'triangle'; oct.frequency.value = f * 2;
-    const gSaw = ctx.createGain(); gSaw.gain.value = 0.32;
-    const gSine = ctx.createGain(); gSine.gain.value = 0.75;
-    const gOct = ctx.createGain(); gOct.gain.value = 0.12;
-
+  // segs: [{t, midi, how}] — 첫 음은 피킹, 이후는 'tie'(유지) / 'slide'(미끄러짐) / 'hp'(해머온·풀오프)
+  function voice(segs, end, dest) {
+    const t = segs[0].t, f = freq(segs[0].midi);
+    const oscs = [['sawtooth', 1, 0.32], ['sine', 1, 0.75], ['triangle', 2, 0.12]].map(([type, mul, vol]) => {
+      const o = ctx.createOscillator(); o.type = type;
+      const g = ctx.createGain(); g.gain.value = vol;
+      o.connect(g);
+      return { o, g, mul };
+    });
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass'; lp.Q.value = 3;
     lp.frequency.setValueAtTime(Math.min(f * 14 + 500, 6000), t);
@@ -207,20 +217,37 @@
     env.gain.setValueAtTime(0, t);
     env.gain.linearRampToValueAtTime(0.9, t + 0.006);
     env.gain.setTargetAtTime(0.38, t + 0.006, 0.22);
-    const end = t + Math.max(len, 0.08);
-    env.gain.setTargetAtTime(0, end, 0.035);
 
-    saw.connect(gSaw).connect(lp);
-    sine.connect(gSine).connect(lp);
-    oct.connect(gOct).connect(lp);
+    oscs.forEach(({ o, mul }) => o.frequency.setValueAtTime(f * mul, t));
+    for (let k = 1; k < segs.length; k++) {
+      const seg = segs[k], prev = segs[k - 1];
+      const nf = freq(seg.midi), pf = freq(prev.midi);
+      if (seg.how === 'slide') {
+        const g = Math.min(0.16, (seg.t - prev.t) * 0.5);
+        oscs.forEach(({ o, mul }) => {
+          o.frequency.setValueAtTime(pf * mul, seg.t - g);
+          o.frequency.linearRampToValueAtTime(nf * mul, seg.t);
+        });
+      } else if (seg.how === 'hp') {
+        oscs.forEach(({ o, mul }) => o.frequency.setValueAtTime(nf * mul, seg.t));
+        lp.frequency.setValueAtTime(Math.min(nf * 8 + 300, 4000), seg.t);
+        lp.frequency.exponentialRampToValueAtTime(nf * 2.5 + 140, seg.t + 0.2);
+        env.gain.setTargetAtTime(0.6, seg.t, 0.004);
+        env.gain.setTargetAtTime(0.36, seg.t + 0.015, 0.2);
+      }
+    }
+    end = Math.max(end, t + 0.08);
+    env.gain.setTargetAtTime(0, end, 0.035);
+    oscs.forEach(({ g }) => g.connect(lp));
     lp.connect(env).connect(dest);
-    [saw, sine, oct].forEach(o => { o.start(t); o.stop(end + 0.3); });
+    oscs.forEach(({ o }) => { o.start(t); o.stop(end + 0.3); });
   }
 
   function preview(n) {
     if (!n || n.rest) return;
     audio();
-    pluck(midiOf(n), ctx.currentTime + 0.01, 0.5, master);
+    const t = ctx.currentTime + 0.01;
+    voice([{ t, midi: midiOf(n) }], t + 0.5, master);
   }
 
   // ---------- 재생 ----------
@@ -236,10 +263,18 @@
     let t = ctx.currentTime + 0.08;
     const start = state.selected >= 0 ? state.selected : 0;
     const events = [];
+    let segs = null;
     for (let i = start; i < state.notes.length; i++) {
       const n = state.notes[i];
-      const len = n.beats * spb;
-      if (!n.rest) pluck(midiOf(n), t, len * 0.92, out);
+      const len = lenOf(n) * spb;
+      if (!n.rest) {
+        const prev = state.notes[i - 1];
+        const how = segs && prev && !prev.rest && prev.link;
+        if (how) segs.push({ t, midi: midiOf(n), how: how === 'tie' && midiOf(prev) !== midiOf(n) ? 'hp' : how });
+        else segs = [{ t, midi: midiOf(n) }];
+        const next = state.notes[i + 1];
+        if (!(n.link && next && !next.rest)) { voice(segs, t + len * 0.92, out); segs = null; }
+      }
       events.push({ i, t });
       t += len;
     }
@@ -276,15 +311,15 @@
     let sys = 0, cursor = LEFT + CLEF_W + TS_W, beats = 0;
     const limit = width - PAD_R;
     state.notes.forEach((n, i) => {
-      const w = WIDTH[n.beats];
+      const w = WIDTH[n.beats] + (n.dot ? 10 : 0);
       if (cursor + w > limit) { sys++; cursor = LEFT + CLEF_W; }
       items.push({ i, x: cursor + 18, sys });
       cursor += w;
-      beats += n.beats;
-      if (beats >= 4 - 1e-9) { bars.push({ x: cursor, sys }); cursor += 6; beats = 0; }
+      beats += lenOf(n);
+      if (beats >= 4 - 1e-9) { bars.push({ x: cursor, sys }); cursor += 6; beats -= 4; }
     });
     let gSys = sys, gCursor = cursor;
-    if (gCursor + WIDTH[state.dur] > limit) { gSys++; gCursor = LEFT + CLEF_W; }
+    if (gCursor + WIDTH[state.dur] + 10 > limit) { gSys++; gCursor = LEFT + CLEF_W; }
     return { items, bars, systems: gSys + 1, ghost: { x: gCursor + 18, sys: gSys } };
   }
 
@@ -329,10 +364,15 @@
   }
 
   function drawNote(g, n, x, sys, color, label) {
-    if (n.rest) return drawRest(g, n.beats, x, sys, color);
+    if (n.rest) {
+      drawRest(g, n.beats, x, sys, color);
+      if (n.dot) el('circle', { cx: x + 10, cy: sys * SYS_H + TOP + 20, r: 1.8, fill: color }, g);
+      return;
+    }
     const y = yOfStr(n.s, sys);
     const text = label ?? String(n.f);
-    const w = text.length > 1 ? 18 : 11;
+    const w = text.length * 7 + 4;
+    if (n.dot) el('circle', { cx: x + Math.max(w / 2, n.beats >= 2 ? 9 : 0) + 4, cy: y - 4, r: 1.8, fill: color }, g);
     el('rect', { x: x - w / 2, y: y - 7, width: w, height: 14, fill: 'var(--card)' }, g);
     if (n.beats >= 2) el('circle', { cx: x, cy: y, r: 9, fill: 'none', stroke: color, 'stroke-width': 1 }, g);
     const t = el('text', {
@@ -355,6 +395,29 @@
     } else {
       el('circle', { cx: x - 3, cy: mid - 5, r: 2.6, fill: color }, g);
       el('path', { d: `M${x - 4} ${mid - 3} Q${x} ${mid - 1} ${x + 4} ${mid - 7} L${x - 1} ${mid + 9}`, fill: 'none', stroke: color, 'stroke-width': 1.5 }, g);
+    }
+  }
+
+  // 연결 표시: 이음줄·H/P는 숫자 위 호, 슬라이드는 사선
+  function drawLink(g, a, b, n, m) {
+    const ink = 'var(--ink)';
+    const ya = yOfStr(n.s, a.sys);
+    const pending = !b || !m || m.rest;
+    const x1 = a.x + 8;
+    const sameSys = !pending && b.sys === a.sys;
+    const x2 = pending ? x1 + 18 : sameSys ? b.x - 8 : svg.clientWidth - PAD_R;
+    const op = pending ? 0.35 : 1;
+    if (n.link === 'slide') {
+      const yb = pending || !sameSys ? ya : yOfStr(m.s, b.sys);
+      const up = pending ? 1 : m.f > n.f || (m.f === n.f && m.s > n.s) ? 1 : -1;
+      el('line', { x1, y1: ya + 4 * up, x2, y2: yb - 4 * up, stroke: ink, 'stroke-width': 1.4, opacity: op }, g);
+      return;
+    }
+    const top = ya - 9, mid = (x1 + x2) / 2;
+    el('path', { d: `M${x1 - 2} ${top} Q${mid} ${top - 11} ${x2 + 2} ${top}`, fill: 'none', stroke: ink, 'stroke-width': 1.2, opacity: op }, g);
+    if (n.link === 'hp' && !pending) {
+      const t = el('text', { x: mid, y: top - 11, 'text-anchor': 'middle', 'font-size': 10, 'font-weight': 700, fill: ink }, g);
+      t.textContent = midiOf(m) >= midiOf(n) ? 'H' : 'P';
     }
   }
 
@@ -394,11 +457,17 @@
     }
 
     const ng = el('g', {}, svg);
-    for (const it of L.items) drawNote(ng, state.notes[it.i], it.x, it.sys, 'var(--ink)');
+    const cg = el('g', {}, svg);
+    for (const it of L.items) {
+      const n = state.notes[it.i], prev = state.notes[it.i - 1];
+      const tied = prev && prev.link === 'tie' && !prev.rest && !n.rest && midiOf(prev) === midiOf(n);
+      drawNote(ng, n, it.x, it.sys, 'var(--ink)', tied ? `(${n.f})` : undefined);
+      if (n.link && !n.rest) drawLink(cg, it, L.items[it.i + 1], n, state.notes[it.i + 1]);
+    }
 
     if (state.hover && !playback) {
       const gh = L.ghost;
-      const n = state.rest ? { rest: true, beats: state.dur } : { s: state.hover.s, f: state.lastFret, beats: state.dur };
+      const n = state.rest ? { rest: true, beats: state.dur, dot: state.dot } : { s: state.hover.s, f: state.lastFret, beats: state.dur, dot: state.dot };
       drawNote(el('g', { opacity: 0.32 }, svg), n, gh.x, gh.sys, 'var(--ink)');
     }
 
@@ -459,18 +528,21 @@
 
   // ---------- 상태 표시 ----------
   function renderStatus() {
-    const total = state.notes.reduce((a, n) => a + n.beats, 0);
+    const total = state.notes.reduce((a, n) => a + lenOf(n), 0);
     const measures = Math.ceil(total / 4 - 1e-9);
     document.getElementById('stat').textContent = `마디 ${measures} · 음표 ${state.notes.length}`;
     let info;
     const focus = state.notes[state.editing >= 0 ? state.editing : state.selected];
-    if (focus) info = `${state.editing >= 0 ? '입력 중 · 숫자로 프렛' : '선택'}: ${focus.rest ? '쉼표' : describe(focus)} · ${DUR_NAME[focus.beats]}`;
-    else if (state.hover && !state.rest) info = `입력: ${describe({ s: state.hover.s, f: state.lastFret })} · ${DUR_NAME[state.dur]}`;
-    else info = `입력: ${state.rest ? '쉼표' : '음표'} · ${DUR_NAME[state.dur]}`;
+    if (focus) info = `${state.editing >= 0 ? '입력 중 · 숫자로 프렛' : '선택'}: ${focus.rest ? '쉼표' : describe(focus)} · ${durName(focus.beats, focus.dot)}${focus.link ? ' · ' + LINK_NAME[focus.link] : ''}`;
+    else if (state.hover && !state.rest) info = `입력: ${describe({ s: state.hover.s, f: state.lastFret })} · ${durName(state.dur, state.dot)}`;
+    else info = `입력: ${state.rest ? '쉼표' : '음표'} · ${durName(state.dur, state.dot)}`;
     document.getElementById('info').textContent = info;
 
     document.querySelectorAll('#durs button').forEach(b => b.classList.toggle('on', +b.dataset.b === state.dur));
     document.getElementById('restBtn').classList.toggle('on', state.rest);
+    document.getElementById('dotBtn').classList.toggle('on', state.dot);
+    const lt = linkTarget();
+    document.querySelectorAll('#marks [data-link]').forEach(b => b.classList.toggle('on', !!lt && lt.link === b.dataset.link));
   }
 
   function render() { renderScore(); renderFret(); renderStatus(); }
@@ -493,7 +565,7 @@
       preview(sel);
       render();
     } else {
-      append({ s, f, beats: state.dur, rest: false });
+      append({ s, f, beats: state.dur, dot: state.dot, rest: false, link: null });
     }
     clearTimeout(flashTimer);
     flash = { s, f };
@@ -531,8 +603,8 @@
       return;
     }
     if (state.selected >= 0) { state.selected = -1; render(); return; }
-    if (state.rest) append({ rest: true, beats: state.dur, s: 0, f: 0 });
-    else append({ s: strFromY(y, sys), f: state.lastFret, beats: state.dur, rest: false }, true);
+    if (state.rest) append({ rest: true, beats: state.dur, dot: state.dot, s: 0, f: 0, link: null });
+    else append({ s: strFromY(y, sys), f: state.lastFret, beats: state.dur, dot: state.dot, rest: false, link: null }, true);
   });
 
   function del() {
@@ -550,6 +622,27 @@
     state.dur = b;
     const n = state.notes[state.editing >= 0 ? state.editing : state.selected];
     if (n) n.beats = b;
+    render();
+  }
+
+  function setDot() {
+    const n = state.notes[state.editing >= 0 ? state.editing : state.selected];
+    if (n) { n.dot = !n.dot; state.dot = n.dot; }
+    else state.dot = !state.dot;
+    render();
+  }
+
+  // 연결 대상: 선택(입력 중)인 음, 없으면 마지막 음
+  function linkTarget() {
+    const idx = state.editing >= 0 ? state.editing : state.selected >= 0 ? state.selected : state.notes.length - 1;
+    const n = state.notes[idx];
+    return n && !n.rest ? n : null;
+  }
+
+  function setLink(type) {
+    const n = linkTarget();
+    if (!n) return;
+    n.link = n.link === type ? null : type;
     render();
   }
 
@@ -584,6 +677,8 @@
     durWrap.appendChild(btn);
   });
   document.getElementById('restBtn').addEventListener('click', () => { state.rest = !state.rest; render(); });
+  document.getElementById('dotBtn').addEventListener('click', setDot);
+  document.querySelectorAll('#marks [data-link]').forEach(b => b.addEventListener('click', () => setLink(b.dataset.link)));
   document.getElementById('delBtn').addEventListener('click', del);
   document.getElementById('clearBtn').addEventListener('click', () => {
     if (!state.notes.length || !confirm('악보를 모두 지울까요?')) return;
@@ -605,6 +700,10 @@
     if (/^[0-9]$/.test(k)) typeFret(k);
     else if (DUR_KEY[lk]) setDur(DUR_KEY[lk]);
     else if (lk === 's') { state.rest = !state.rest; render(); }
+    else if (k === '.') setDot();
+    else if (lk === 't') setLink('tie');
+    else if (k === '/') { e.preventDefault(); setLink('slide'); }
+    else if (lk === 'h') setLink('hp');
     else if (k === 'Backspace' || k === 'Delete') { e.preventDefault(); del(); }
     else if (k === 'Escape' || k === 'Enter') { state.selected = state.editing = -1; render(); }
     else if ((k === 'ArrowUp' || k === 'ArrowDown') && focus && !focus.rest) {
