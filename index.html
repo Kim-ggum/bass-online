@@ -51,8 +51,7 @@
   .group button svg { display: block; }
   .chip { background: var(--soft); }
   .chip.on { background: var(--ink); color: #fff; }
-  .acc button { font-size: 17px; }
-  .spacer { flex: 1; }
+    .spacer { flex: 1; }
   .tempo { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
   .tempo b { min-width: 28px; display: inline-block; }
   input[type=range] { width: 110px; accent-color: var(--ink); }
@@ -93,17 +92,12 @@
 <div class="wrap">
   <header>
     <div class="brand">bass<span>.online</span></div>
-    <div class="hint">악보에 음표를 그리면 베이스가 연주합니다</div>
+    <div class="hint">타브 악보에 적으면 베이스가 연주합니다</div>
   </header>
 
   <div class="card toolbar">
     <div class="group" id="durs" aria-label="음표 길이"></div>
-    <button class="chip" id="restBtn" title="쉼표 입력 (R)">쉼표</button>
-    <div class="group acc" id="accs" aria-label="임시표">
-      <button data-acc="-1" title="플랫">♭</button>
-      <button data-acc="0" title="제자리">♮</button>
-      <button data-acc="1" title="샵">♯</button>
-    </div>
+    <button class="chip" id="restBtn" title="쉼표 입력 (S)">쉼표</button>
     <div class="spacer"></div>
     <label class="tempo">♩ = <b id="bpmVal">100</b><input type="range" id="bpm" min="40" max="200" value="100"></label>
     <button class="btn" id="delBtn" title="선택하거나 마지막 음 지우기 (Backspace)">지우기</button>
@@ -114,7 +108,7 @@
   <div class="card">
     <div class="score">
       <svg id="score" xmlns="http://www.w3.org/2000/svg"></svg>
-      <div class="empty" id="empty">오선 위를 클릭하거나 아래 지판을 눌러 음표를 입력하세요</div>
+      <div class="empty" id="empty">타브의 줄을 클릭한 뒤 숫자로 프렛을 입력하거나, 아래 지판을 눌러 입력하세요</div>
     </div>
     <div class="status">
       <span id="stat">마디 0 · 음표 0</span>
@@ -129,9 +123,10 @@
     </div>
     <div class="neck-scroll"><svg id="fret" viewBox="0 0 1000 190" xmlns="http://www.w3.org/2000/svg"></svg></div>
     <div class="keys">
-      <kbd>1</kbd> 온음표 <kbd>2</kbd> 2분 <kbd>4</kbd> 4분 <kbd>8</kbd> 8분 ·
-      <kbd>R</kbd> 쉼표 · <kbd>Space</kbd> 재생/정지 ·
-      음표 클릭 후 <kbd>↑</kbd><kbd>↓</kbd> 음높이 · <kbd>Backspace</kbd> 지우기 · <kbd>Esc</kbd> 선택 해제
+      <kbd>Q</kbd> 온음표 <kbd>W</kbd> 2분 <kbd>E</kbd> 4분 <kbd>R</kbd> 8분 · <kbd>S</kbd> 쉼표 ·
+      <kbd>0</kbd>–<kbd>9</kbd> 프렛 (<kbd>1</kbd><kbd>0</kbd>~<kbd>1</kbd><kbd>2</kbd>는 이어서) ·
+      <kbd>↑</kbd><kbd>↓</kbd> 프렛 ± · <kbd>Shift</kbd>+<kbd>↑</kbd><kbd>↓</kbd> 줄 이동 ·
+      <kbd>←</kbd><kbd>→</kbd> 음표 이동 · <kbd>Backspace</kbd> 지우기 · <kbd>Space</kbd> 재생/정지 · <kbd>Esc</kbd> 선택 해제
     </div>
   </div>
 </div>
@@ -139,29 +134,27 @@
 <script>
 (() => {
   const NS = 'http://www.w3.org/2000/svg';
-  const LETTERS = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
-  const SEMI = [0, 2, 4, 5, 7, 9, 11];
-  // 반음 → [음이름 인덱스, 임시표] (샵 표기)
-  const SPELL = [[0,0],[0,1],[1,0],[1,1],[2,0],[3,0],[3,1],[4,0],[4,1],[5,0],[5,1],[6,0]];
+  const NAMES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
   const DURS = [4, 2, 1, 0.5];
   const DUR_NAME = { 4: '온음표', 2: '2분음표', 1: '4분음표', 0.5: '8분음표' };
+  const DUR_KEY = { q: 4, w: 2, e: 1, r: 0.5 };
 
-  // 베이스 개방현 실음 MIDI: E1 A1 D2 G2 (악보는 한 옥타브 위로 기보)
+  // 4현 베이스 개방현 MIDI: E1 A1 D2 G2 (s: 0=E … 3=G)
   const OPEN = [28, 33, 38, 43];
   const STR_NAME = ['E', 'A', 'D', 'G'];
   const FRETS = 12;
-  const D_MIN = 16, D_MAX = 32; // 기보 E2 ~ G4
 
-  // 악보 배치 상수
-  const SYS_H = 150, TOP = 45, BOT = TOP + 40, LEFT = 14, CLEF_W = 44, TS_W = 30, PAD_R = 14;
+  // 타브 배치 상수: 줄 간격 16, 위에서부터 G D A E
+  const SYS_H = 130, TOP = 28, GAP = 16, BOT = TOP + GAP * 3;
+  const LEFT = 14, CLEF_W = 34, TS_W = 26, PAD_R = 14;
   const WIDTH = { 4: 80, 2: 58, 1: 42, 0.5: 34 };
-  const ACC_W = 12;
 
   const state = {
-    notes: [],          // {d, acc, beats, rest, pos?}
-    dur: 1, rest: false, acc: 0, tempo: 100,
-    selected: -1, playhead: -1,
-    hover: null,        // {d}
+    notes: [],          // {s, f, beats, rest}
+    dur: 1, rest: false, tempo: 100,
+    selected: -1, editing: -1, playhead: -1,
+    lastFret: 0,
+    hover: null,        // {s}
   };
 
   const svg = document.getElementById('score');
@@ -175,28 +168,11 @@
   };
 
   // ---------- 음높이 ----------
-  const writtenMidi = n => (Math.floor(n.d / 7) + 1) * 12 + SEMI[n.d % 7] + n.acc;
-  const soundMidi = n => writtenMidi(n) - 12;
+  const midiOf = n => OPEN[n.s] + n.f;
   const freq = m => 440 * Math.pow(2, (m - 69) / 12);
-  const accSym = a => (a > 0 ? '♯' : a < 0 ? '♭' : '');
-  const nameOf = n => {
-    const m = soundMidi(n);
-    return LETTERS[n.d % 7] + accSym(n.acc) + (Math.floor(m / 12) - 1);
-  };
-  const spell = writtenM => {
-    const [li, acc] = SPELL[((writtenM % 12) + 12) % 12];
-    return { d: (Math.floor(writtenM / 12) - 1) * 7 + li, acc };
-  };
-  const positionFor = n => {
-    if (n.pos && OPEN[n.pos.s] + n.pos.f === soundMidi(n)) return n.pos;
-    const m = soundMidi(n);
-    let best = null;
-    OPEN.forEach((o, s) => {
-      const f = m - o;
-      if (f >= 0 && f <= FRETS && (!best || f < best.f)) best = { s, f };
-    });
-    return best;
-  };
+  const pitchName = m => NAMES[m % 12] + (Math.floor(m / 12) - 1);
+  const letter = m => NAMES[m % 12];
+  const describe = n => `${STR_NAME[n.s]}현 ${n.f}프렛 (${pitchName(midiOf(n))})`;
 
   // ---------- 소리 ----------
   let ctx = null, master = null;
@@ -217,10 +193,10 @@
     const f = freq(midi);
     const saw = ctx.createOscillator(); saw.type = 'sawtooth'; saw.frequency.value = f;
     const sine = ctx.createOscillator(); sine.type = 'sine'; sine.frequency.value = f;
-    const sub = ctx.createOscillator(); sub.type = 'triangle'; sub.frequency.value = f * 2;
+    const oct = ctx.createOscillator(); oct.type = 'triangle'; oct.frequency.value = f * 2;
     const gSaw = ctx.createGain(); gSaw.gain.value = 0.32;
     const gSine = ctx.createGain(); gSine.gain.value = 0.75;
-    const gSub = ctx.createGain(); gSub.gain.value = 0.12;
+    const gOct = ctx.createGain(); gOct.gain.value = 0.12;
 
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass'; lp.Q.value = 3;
@@ -236,15 +212,15 @@
 
     saw.connect(gSaw).connect(lp);
     sine.connect(gSine).connect(lp);
-    sub.connect(gSub).connect(lp);
+    oct.connect(gOct).connect(lp);
     lp.connect(env).connect(dest);
-    [saw, sine, sub].forEach(o => { o.start(t); o.stop(end + 0.3); });
+    [saw, sine, oct].forEach(o => { o.start(t); o.stop(end + 0.3); });
   }
 
   function preview(n) {
-    if (n.rest) return;
+    if (!n || n.rest) return;
     audio();
-    pluck(soundMidi(n), ctx.currentTime + 0.01, 0.5, master);
+    pluck(midiOf(n), ctx.currentTime + 0.01, 0.5, master);
   }
 
   // ---------- 재생 ----------
@@ -254,6 +230,7 @@
   function play() {
     if (!state.notes.length) return;
     audio();
+    state.editing = -1;
     const out = ctx.createGain(); out.connect(master);
     const spb = 60 / state.tempo;
     let t = ctx.currentTime + 0.08;
@@ -262,7 +239,7 @@
     for (let i = start; i < state.notes.length; i++) {
       const n = state.notes[i];
       const len = n.beats * spb;
-      if (!n.rest) pluck(soundMidi(n), t, len * 0.92, out);
+      if (!n.rest) pluck(midiOf(n), t, len * 0.92, out);
       events.push({ i, t });
       t += len;
     }
@@ -296,98 +273,80 @@
   // ---------- 배치 ----------
   function layout(width) {
     const items = [], bars = [];
-    let sys = 0, cursor = LEFT + CLEF_W + TS_W, beats = 0, accMap = {};
+    let sys = 0, cursor = LEFT + CLEF_W + TS_W, beats = 0;
     const limit = width - PAD_R;
-
     state.notes.forEach((n, i) => {
-      let shown = null;
-      if (!n.rest) {
-        const prev = accMap[n.d] ?? 0;
-        if (n.acc !== prev) shown = n.acc;
-        accMap[n.d] = n.acc;
-      }
-      const w = WIDTH[n.beats] + (shown !== null ? ACC_W : 0);
+      const w = WIDTH[n.beats];
       if (cursor + w > limit) { sys++; cursor = LEFT + CLEF_W; }
-      items.push({ i, x: cursor + 18 + (shown !== null ? ACC_W : 0), sys, shown });
+      items.push({ i, x: cursor + 18, sys });
       cursor += w;
       beats += n.beats;
-      if (beats >= 4 - 1e-9) {
-        bars.push({ x: cursor, sys });
-        cursor += 6; beats = 0; accMap = {};
-      }
+      if (beats >= 4 - 1e-9) { bars.push({ x: cursor, sys }); cursor += 6; beats = 0; }
     });
-
     let gSys = sys, gCursor = cursor;
-    if (gCursor + WIDTH[state.dur] + ACC_W > limit) { gSys++; gCursor = LEFT + CLEF_W; }
-    return { items, bars, systems: gSys + 1, ghost: { x: gCursor + 18, sys: gSys, accMap: gSys === sys ? accMap : {} } };
+    if (gCursor + WIDTH[state.dur] > limit) { gSys++; gCursor = LEFT + CLEF_W; }
+    return { items, bars, systems: gSys + 1, ghost: { x: gCursor + 18, sys: gSys } };
   }
 
-  const yOf = (d, sys) => sys * SYS_H + BOT - (d - 18) * 5;
-  const dFromY = (y, sys) => Math.max(D_MIN, Math.min(D_MAX, Math.round((sys * SYS_H + BOT - y) / 5) + 18));
+  const yOfStr = (s, sys) => sys * SYS_H + TOP + (3 - s) * GAP;
+  const strFromY = (y, sys) => {
+    const s = 3 - Math.round((y - sys * SYS_H - TOP) / GAP);
+    return Math.max(0, Math.min(3, s));
+  };
 
-  // ---------- 악보 그리기 ----------
+  // ---------- 타브 그리기 ----------
   function drawClef(g, x, sys) {
-    const fy = sys * SYS_H + TOP + 10; // F3 줄 (위에서 두 번째 줄)
-    el('circle', { cx: x + 4, cy: fy, r: 4.2, fill: 'var(--ink)' }, g);
-    el('path', {
-      d: `M${x + 1} ${fy} C${x + 1} ${fy - 13} ${x + 21} ${fy - 15} ${x + 24} ${fy - 1} C${x + 27} ${fy + 14} ${x + 12} ${fy + 27} ${x - 2} ${fy + 33}`,
-      fill: 'none', stroke: 'var(--ink)', 'stroke-width': 2.6, 'stroke-linecap': 'round',
-    }, g);
-    el('circle', { cx: x + 31, cy: fy - 5, r: 2, fill: 'var(--ink)' }, g);
-    el('circle', { cx: x + 31, cy: fy + 5, r: 2, fill: 'var(--ink)' }, g);
+    const top = sys * SYS_H + TOP;
+    ['T', 'A', 'B'].forEach((ch, k) => {
+      const t = el('text', {
+        x, y: top + 8 + k * 16, 'text-anchor': 'middle', 'dominant-baseline': 'central',
+        'font-size': 15, 'font-weight': 800, fill: 'var(--ink)',
+      }, g);
+      t.textContent = ch;
+    });
   }
 
   function drawTime(g, x, sys) {
     const top = sys * SYS_H + TOP;
-    for (const dy of [10, 30]) {
+    for (const dy of [12, 36]) {
       const t = el('text', {
         x, y: top + dy, 'text-anchor': 'middle', 'dominant-baseline': 'central',
-        'font-size': 23, 'font-weight': 800, 'font-family': 'Georgia, "Times New Roman", serif', fill: 'var(--ink)',
+        'font-size': 22, 'font-weight': 800, 'font-family': 'Georgia, "Times New Roman", serif', fill: 'var(--ink)',
       }, g);
       t.textContent = '4';
     }
   }
 
-  function drawLedgers(g, x, d, sys, color) {
-    for (let l = 16; l >= d; l -= 2) el('line', { x1: x - 10, x2: x + 10, y1: yOf(l, sys), y2: yOf(l, sys), stroke: color, 'stroke-width': 1.2 }, g);
-    for (let l = 28; l <= d; l += 2) el('line', { x1: x - 10, x2: x + 10, y1: yOf(l, sys), y2: yOf(l, sys), stroke: color, 'stroke-width': 1.2 }, g);
+  // 리듬 기둥: 타브 아래 (온음표 없음, 2분 짧게, 4분 길게, 8분 깃발)
+  function drawRhythm(g, beats, x, sys, color) {
+    if (beats >= 4) return;
+    const y0 = sys * SYS_H + BOT + 10;
+    const y1 = y0 + (beats === 2 ? 12 : 24);
+    el('line', { x1: x, x2: x, y1: y0, y2: y1, stroke: color, 'stroke-width': 1.4 }, g);
+    if (beats === 0.5) {
+      el('path', { d: `M${x} ${y1} C${x + 1} ${y1 - 6} ${x + 9} ${y1 - 7} ${x + 8} ${y1 - 16} C${x + 7} ${y1 - 11} ${x + 4} ${y1 - 9} ${x} ${y1 - 9} Z`, fill: color }, g);
+    }
   }
 
-  function drawNote(g, n, x, sys, shown, color) {
+  function drawNote(g, n, x, sys, color, label) {
     if (n.rest) return drawRest(g, n.beats, x, sys, color);
-    const y = yOf(n.d, sys);
-    drawLedgers(g, x, n.d, sys, color);
-    const filled = n.beats <= 1;
-    el('ellipse', {
-      cx: x, cy: y, rx: 6.4, ry: 4.5, transform: `rotate(-20 ${x} ${y})`,
-      fill: filled ? color : 'none', stroke: color, 'stroke-width': filled ? 1 : 1.8,
+    const y = yOfStr(n.s, sys);
+    const text = label ?? String(n.f);
+    const w = text.length > 1 ? 18 : 11;
+    el('rect', { x: x - w / 2, y: y - 7, width: w, height: 14, fill: 'var(--card)' }, g);
+    if (n.beats >= 2) el('circle', { cx: x, cy: y, r: 9, fill: 'none', stroke: color, 'stroke-width': 1 }, g);
+    const t = el('text', {
+      x, y, 'text-anchor': 'middle', 'dominant-baseline': 'central',
+      'font-size': 13, 'font-weight': 700, fill: color, 'font-variant-numeric': 'tabular-nums',
     }, g);
-    if (n.beats < 4) {
-      const up = n.d < 22;
-      const sx = up ? x + 5.8 : x - 5.8;
-      const ey = up ? y - 34 : y + 34;
-      el('line', { x1: sx, x2: sx, y1: y + (up ? -1 : 1), y2: ey, stroke: color, 'stroke-width': 1.4 }, g);
-      if (n.beats === 0.5) {
-        const k = up ? 1 : -1;
-        el('path', {
-          d: `M${sx} ${ey} C${sx + 1} ${ey + 8 * k} ${sx + 11} ${ey + 10 * k} ${sx + 9} ${ey + 22 * k} C${sx + 8} ${ey + 15 * k} ${sx + 4} ${ey + 12 * k} ${sx} ${ey + 11 * k} Z`,
-          fill: color,
-        }, g);
-      }
-    }
-    if (shown !== null) {
-      const t = el('text', {
-        x: x - 15, y, 'text-anchor': 'middle', 'dominant-baseline': 'central',
-        'font-size': 17, fill: color,
-      }, g);
-      t.textContent = shown > 0 ? '♯' : shown < 0 ? '♭' : '♮';
-    }
+    t.textContent = text;
+    drawRhythm(g, n.beats, x, sys, color);
   }
 
   function drawRest(g, beats, x, sys, color) {
-    const mid = sys * SYS_H + TOP + 20;
-    if (beats === 4) el('rect', { x: x - 6, y: mid - 10, width: 12, height: 5, fill: color }, g);
-    else if (beats === 2) el('rect', { x: x - 6, y: mid - 5, width: 12, height: 5, fill: color }, g);
+    const mid = sys * SYS_H + TOP + 24;
+    if (beats === 4) el('rect', { x: x - 6, y: mid - 8, width: 12, height: 5, fill: color }, g);
+    else if (beats === 2) el('rect', { x: x - 6, y: mid - 3, width: 12, height: 5, fill: color }, g);
     else if (beats === 1) {
       el('path', {
         d: `M${x - 3} ${mid - 15} L${x + 4} ${mid - 7} L${x - 2} ${mid - 1} L${x + 4} ${mid + 6} C${x - 3} ${mid + 3} ${x - 4} ${mid + 10} ${x + 1} ${mid + 14}`,
@@ -405,30 +364,29 @@
     const width = svg.clientWidth || 800;
     const L = layout(width);
     lastLayout = L;
-    const h = L.systems * SYS_H + 10;
+    const h = L.systems * SYS_H + 6;
     svg.setAttribute('viewBox', `0 0 ${width} ${h}`);
     svg.setAttribute('height', h);
     svg.textContent = '';
 
-    // 강조 배경
     const bg = el('g', {}, svg);
     const mark = (idx, fill, stroke) => {
       const it = L.items[idx]; if (!it) return;
-      const top = it.sys * SYS_H;
-      el('rect', { x: it.x - 15, y: top + 6, width: 30, height: SYS_H - 14, rx: 7, fill, stroke: stroke || 'none' }, bg);
+      el('rect', { x: it.x - 15, y: it.sys * SYS_H + TOP - 18, width: 30, height: 104, rx: 7, fill, stroke: stroke || 'none' }, bg);
     };
     if (state.playhead >= 0) mark(state.playhead, '#e6e6e4');
-    if (state.selected >= 0 && state.selected !== state.playhead) mark(state.selected, 'none', '#b5b5b2');
+    const focus = state.editing >= 0 ? state.editing : state.selected;
+    if (focus >= 0 && focus !== state.playhead) mark(focus, 'none', '#b5b5b2');
 
     for (let s = 0; s < L.systems; s++) {
       const g = el('g', {}, svg);
-      for (let k = 0; k < 5; k++) {
-        const y = s * SYS_H + TOP + k * 10;
+      for (let k = 0; k < 4; k++) {
+        const y = s * SYS_H + TOP + k * GAP;
         el('line', { x1: LEFT, x2: width - PAD_R, y1: y, y2: y, stroke: '#9a9a98', 'stroke-width': 1 }, g);
       }
       el('line', { x1: LEFT, x2: LEFT, y1: s * SYS_H + TOP, y2: s * SYS_H + BOT, stroke: 'var(--ink)', 'stroke-width': 1.2 }, g);
-      drawClef(g, LEFT + 8, s);
-      if (s === 0) drawTime(g, LEFT + CLEF_W + 10, s);
+      drawClef(g, LEFT + 16, s);
+      if (s === 0) drawTime(g, LEFT + CLEF_W + 8, s);
     }
 
     for (const b of L.bars) {
@@ -436,15 +394,12 @@
     }
 
     const ng = el('g', {}, svg);
-    for (const it of L.items) drawNote(ng, state.notes[it.i], it.x, it.sys, it.shown, 'var(--ink)');
+    for (const it of L.items) drawNote(ng, state.notes[it.i], it.x, it.sys, 'var(--ink)');
 
-    // 입력 미리보기 (고스트)
     if (state.hover && !playback) {
       const gh = L.ghost;
-      const n = state.rest ? { rest: true, beats: state.dur } : { d: state.hover.d, acc: state.acc, beats: state.dur };
-      let shown = null;
-      if (!n.rest) { const prev = gh.accMap[n.d] ?? 0; if (n.acc !== prev) shown = n.acc; }
-      drawNote(el('g', { opacity: 0.32 }, svg), n, gh.x + (shown !== null ? ACC_W : 0), gh.sys, shown, 'var(--ink)');
+      const n = state.rest ? { rest: true, beats: state.dur } : { s: state.hover.s, f: state.lastFret, beats: state.dur };
+      drawNote(el('g', { opacity: 0.32 }, svg), n, gh.x, gh.sys, 'var(--ink)');
     }
 
     document.getElementById('empty').style.display = state.notes.length ? 'none' : '';
@@ -453,7 +408,7 @@
   // ---------- 지판 ----------
   const NUT = 64, NECK_END = 985;
   const fretX = n => NUT + ((1 - Math.pow(2, -n / 12)) / 0.5) * (NECK_END - NUT);
-  const strY = s => 150 - s * 36; // E 아래, G 위
+  const strY = s => 150 - s * 36; // E 아래, G 위 (타브와 같은 순서)
   const cellX = f => (f === 0 ? NUT / 2 + 4 : (fretX(f - 1) + fretX(f)) / 2);
   let fretLayer;
 
@@ -490,15 +445,15 @@
   function renderFret() {
     fretLayer.textContent = '';
     const marks = [];
-    const idx = state.playhead >= 0 ? state.playhead : state.selected;
+    const idx = state.playhead >= 0 ? state.playhead : state.editing >= 0 ? state.editing : state.selected;
     const n = state.notes[idx];
-    if (n && !n.rest) { const p = positionFor(n); if (p) marks.push({ ...p, n }); }
+    if (n && !n.rest) marks.push({ s: n.s, f: n.f });
     if (flash && !marks.some(m => m.s === flash.s && m.f === flash.f)) marks.push(flash);
     for (const m of marks) {
       const x = cellX(m.f), y = strY(m.s);
       el('circle', { cx: x, cy: y, r: 12, fill: '#fafafa', stroke: '#000', 'stroke-width': 1.5 }, fretLayer);
       const t = el('text', { x, y, 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-size': 10.5, 'font-weight': 700, fill: '#111' }, fretLayer);
-      t.textContent = LETTERS[m.n.d % 7] + accSym(m.n.acc);
+      t.textContent = letter(OPEN[m.s] + m.f);
     }
   }
 
@@ -507,41 +462,41 @@
     const total = state.notes.reduce((a, n) => a + n.beats, 0);
     const measures = Math.ceil(total / 4 - 1e-9);
     document.getElementById('stat').textContent = `마디 ${measures} · 음표 ${state.notes.length}`;
-    let info = '';
-    const sel = state.notes[state.selected];
-    if (sel) info = `선택: ${sel.rest ? '쉼표' : nameOf(sel)} · ${DUR_NAME[sel.beats]}`;
-    else if (state.hover && !state.rest) info = `입력: ${nameOf({ d: state.hover.d, acc: state.acc })} · ${DUR_NAME[state.dur]}`;
+    let info;
+    const focus = state.notes[state.editing >= 0 ? state.editing : state.selected];
+    if (focus) info = `${state.editing >= 0 ? '입력 중 · 숫자로 프렛' : '선택'}: ${focus.rest ? '쉼표' : describe(focus)} · ${DUR_NAME[focus.beats]}`;
+    else if (state.hover && !state.rest) info = `입력: ${describe({ s: state.hover.s, f: state.lastFret })} · ${DUR_NAME[state.dur]}`;
     else info = `입력: ${state.rest ? '쉼표' : '음표'} · ${DUR_NAME[state.dur]}`;
     document.getElementById('info').textContent = info;
 
     document.querySelectorAll('#durs button').forEach(b => b.classList.toggle('on', +b.dataset.b === state.dur));
-    document.querySelectorAll('#accs button').forEach(b => b.classList.toggle('on', +b.dataset.acc === state.acc));
     document.getElementById('restBtn').classList.toggle('on', state.rest);
   }
 
   function render() { renderScore(); renderFret(); renderStatus(); }
 
   // ---------- 입력 ----------
-  function append(n) {
+  function append(n, editing = false) {
     state.notes.push(n);
     state.selected = -1;
+    state.editing = editing ? state.notes.length - 1 : -1;
     preview(n);
     render();
   }
 
   function onFret(s, f) {
     if (playback) stop();
-    const sp = spell(OPEN[s] + f + 12);
+    state.lastFret = f;
     const sel = state.notes[state.selected];
     if (sel && !sel.rest) {
-      Object.assign(sel, sp, { pos: { s, f } });
+      sel.s = s; sel.f = f;
       preview(sel);
       render();
     } else {
-      append({ ...sp, beats: state.dur, rest: false, pos: { s, f } });
+      append({ s, f, beats: state.dur, rest: false });
     }
     clearTimeout(flashTimer);
-    flash = { s, f, n: sp };
+    flash = { s, f };
     renderFret();
     flashTimer = setTimeout(() => { flash = null; renderFret(); }, 450);
   }
@@ -555,8 +510,8 @@
 
   svg.addEventListener('pointermove', e => {
     const { y, sys } = pointerInfo(e);
-    const d = dFromY(y, sys);
-    if (!state.hover || state.hover.d !== d) { state.hover = { d }; renderScore(); renderStatus(); }
+    const s = strFromY(y, sys);
+    if (!state.hover || state.hover.s !== s) { state.hover = { s }; renderScore(); renderStatus(); }
   });
   svg.addEventListener('pointerleave', () => { state.hover = null; renderScore(); renderStatus(); });
 
@@ -564,51 +519,62 @@
     if (playback) stop();
     const { x, y, sys } = pointerInfo(e);
     const hit = lastLayout.items.find(it => {
-      if (it.sys !== sys || Math.abs(it.x - x) > 11) return false;
+      if (it.sys !== sys || Math.abs(it.x - x) > 12) return false;
       const n = state.notes[it.i];
-      return n.rest || Math.abs(yOf(n.d, sys) - y) < 14;
+      return n.rest || Math.abs(yOfStr(n.s, sys) - y) < 9;
     });
     if (hit) {
+      state.editing = -1;
       state.selected = state.selected === hit.i ? -1 : hit.i;
       if (state.selected >= 0) preview(state.notes[hit.i]);
       render();
       return;
     }
     if (state.selected >= 0) { state.selected = -1; render(); return; }
-    if (state.rest) append({ rest: true, beats: state.dur, d: 22, acc: 0 });
-    else append({ d: dFromY(y, sys), acc: state.acc, beats: state.dur, rest: false });
+    if (state.rest) append({ rest: true, beats: state.dur, s: 0, f: 0 });
+    else append({ s: strFromY(y, sys), f: state.lastFret, beats: state.dur, rest: false }, true);
   });
 
   function del() {
     if (playback) stop();
-    if (state.selected >= 0) {
-      state.notes.splice(state.selected, 1);
-      state.selected = Math.min(state.selected, state.notes.length - 1);
-      if (!state.notes.length) state.selected = -1;
+    const idx = state.editing >= 0 ? state.editing : state.selected;
+    state.editing = -1;
+    if (idx >= 0) {
+      state.notes.splice(idx, 1);
+      state.selected = state.selected >= 0 ? Math.min(idx, state.notes.length - 1) : -1;
     } else state.notes.pop();
     render();
   }
 
   function setDur(b) {
     state.dur = b;
-    const sel = state.notes[state.selected];
-    if (sel) sel.beats = b;
+    const n = state.notes[state.editing >= 0 ? state.editing : state.selected];
+    if (n) n.beats = b;
     render();
   }
 
-  function setAcc(a) {
-    state.acc = a;
-    const sel = state.notes[state.selected];
-    if (sel && !sel.rest) { sel.acc = a; delete sel.pos; preview(sel); }
-    render();
+  // 숫자 키로 프렛 입력 (1 다음 0~2 를 빨리 누르면 10~12)
+  let digitBuf = '', digitTime = 0;
+  function typeFret(dg) {
+    const n = state.notes[state.editing >= 0 ? state.editing : state.selected];
+    if (!n || n.rest) return;
+    const now = performance.now();
+    let v = +dg;
+    if (digitBuf === '1' && now - digitTime < 800 && v <= 2) { v = 10 + v; digitBuf = ''; }
+    else digitBuf = dg;
+    digitTime = now;
+    n.f = Math.min(FRETS, v);
+    state.lastFret = n.f;
+    preview(n); render();
   }
 
-  // 툴바 생성
+  // 툴바
   const durWrap = document.getElementById('durs');
+  const keyOf = { 4: 'Q', 2: 'W', 1: 'E', 0.5: 'R' };
   DURS.forEach(b => {
     const btn = document.createElement('button');
     btn.dataset.b = b;
-    btn.title = DUR_NAME[b];
+    btn.title = `${DUR_NAME[b]} (${keyOf[b]})`;
     const s = el('svg', { width: 18, height: 24, viewBox: '0 0 18 24' }, btn);
     const filled = b <= 1;
     el('ellipse', { cx: 7, cy: 18.5, rx: 4.8, ry: 3.4, transform: 'rotate(-20 7 18.5)', fill: filled ? 'currentColor' : 'none', stroke: 'currentColor', 'stroke-width': filled ? 1 : 1.6 }, s);
@@ -617,13 +583,12 @@
     btn.addEventListener('click', () => setDur(b));
     durWrap.appendChild(btn);
   });
-  document.querySelectorAll('#accs button').forEach(b => b.addEventListener('click', () => setAcc(+b.dataset.acc)));
   document.getElementById('restBtn').addEventListener('click', () => { state.rest = !state.rest; render(); });
   document.getElementById('delBtn').addEventListener('click', del);
   document.getElementById('clearBtn').addEventListener('click', () => {
     if (!state.notes.length || !confirm('악보를 모두 지울까요?')) return;
     if (playback) stop();
-    state.notes = []; state.selected = -1; render();
+    state.notes = []; state.selected = state.editing = -1; render();
   });
   playBtn.addEventListener('click', () => (playback ? stop() : play()));
   const bpm = document.getElementById('bpm');
@@ -631,27 +596,28 @@
 
   document.addEventListener('keydown', e => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    const inRange = e.target === bpm;
     const k = e.key;
     if (k === ' ') { e.preventDefault(); playback ? stop() : play(); return; }
-    if (inRange) return;
-    if (k === '1') setDur(4);
-    else if (k === '2') setDur(2);
-    else if (k === '4') setDur(1);
-    else if (k === '8') setDur(0.5);
-    else if (k === 'r' || k === 'R') { state.rest = !state.rest; render(); }
+    if (e.target === bpm) return;
+    const lk = k.toLowerCase();
+    const focusIdx = state.editing >= 0 ? state.editing : state.selected;
+    const focus = state.notes[focusIdx];
+    if (/^[0-9]$/.test(k)) typeFret(k);
+    else if (DUR_KEY[lk]) setDur(DUR_KEY[lk]);
+    else if (lk === 's') { state.rest = !state.rest; render(); }
     else if (k === 'Backspace' || k === 'Delete') { e.preventDefault(); del(); }
-    else if (k === 'Escape') { state.selected = -1; render(); }
-    else if ((k === 'ArrowUp' || k === 'ArrowDown') && state.notes[state.selected] && !state.notes[state.selected].rest) {
+    else if (k === 'Escape' || k === 'Enter') { state.selected = state.editing = -1; render(); }
+    else if ((k === 'ArrowUp' || k === 'ArrowDown') && focus && !focus.rest) {
       e.preventDefault();
-      const n = state.notes[state.selected];
-      n.d = Math.max(D_MIN, Math.min(D_MAX, n.d + (k === 'ArrowUp' ? 1 : -1)));
-      n.acc = 0; delete n.pos;
-      preview(n); render();
+      if (e.shiftKey) focus.s = Math.max(0, Math.min(3, focus.s + (k === 'ArrowUp' ? 1 : -1)));
+      else focus.f = Math.max(0, Math.min(FRETS, focus.f + (k === 'ArrowUp' ? 1 : -1)));
+      state.lastFret = focus.f;
+      preview(focus); render();
     } else if ((k === 'ArrowLeft' || k === 'ArrowRight') && state.notes.length) {
       e.preventDefault();
       const max = state.notes.length - 1;
-      const cur = state.selected < 0 ? (k === 'ArrowLeft' ? max + 1 : -1) : state.selected;
+      const cur = focusIdx < 0 ? (k === 'ArrowLeft' ? max + 1 : -1) : focusIdx;
+      state.editing = -1;
       state.selected = Math.max(0, Math.min(max, cur + (k === 'ArrowLeft' ? -1 : 1)));
       preview(state.notes[state.selected]); render();
     }
